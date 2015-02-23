@@ -1,7 +1,12 @@
 #!/usr/bin/python
 
+import os, sys
+from SnapSlideArgs import getArgs
+from GetMouseCoords import GetMouseCoords
 import cv2
 import numpy as np
+
+
 
 ## draw line of given rho and theta on image
 def draw_line(img,rho,theta):
@@ -17,72 +22,58 @@ def draw_line(img,rho,theta):
     cv2.line(img,(x1,y1),(x2,y2),(255),10)
     return img
 
-def SnapSlide(inFile,cntFile,outFile):   
+def SnapSlide(inFile,outFile,verbose): 
     Success=0
-    # read input 
-    print(inFile)
-    img = cv2.imread(inFile)
+    orig = cv2.imread(inFile)
+    img = orig.copy()
     x0, y0, depth = img.shape
-    print('Size of image is '+str(x0)+','+str(y0))
-    # remove salt and pepper noise
-    #img = cv2.bilateralFilter(img,20,100,100)
+    if verbose==1:
+        print('Size of image is '+str(x0)+','+str(y0))
     # convert to grayscale
     gray = cv2.cvtColor(img,cv2.COLOR_BGR2GRAY)
-    #cv2.imwrite('gray.jpg',gray)
+
     small_area=True
     low_thr=150
     high_thr=200
-    while small_area and low_thr<high_thr:
-        # get edges
-        edges = cv2.Canny(gray,low_thr,high_thr,apertureSize = 3)
-        cv2.imwrite('edges.jpg',edges)
-        #get hough lines
-        lines = cv2.HoughLines(edges,1,np.pi/180,200)
-        lines_img =np.zeros(edges.shape,dtype=edges.dtype)
-        for rho,theta in lines[0]:
-            draw_line(lines_img,rho,theta)
-        cv2.imwrite('houghlines.jpg',lines_img)            
-        edges=edges*lines_img
-        t,edges= cv2.threshold(edges,0.1,255,cv2.THRESH_BINARY)
+    
+    edges = cv2.Canny(gray,low_thr,high_thr,apertureSize = 3)
+    
+    # get contours
+    contours,hierarchy = cv2.findContours(edges, cv2.RETR_TREE,cv2.CHAIN_APPROX_SIMPLE)
+    for cnt in contours:
+        hull = cv2.convexHull(cnt)    # find the convex hull of         
+        cv2.drawContours(img,[hull],0,(0,0,255),2)   
         
-        kernel=np.ones((11,11),dtype='uint')
-        edges = cv2.dilate(edges,kernel)
-        t,edges= cv2.threshold(edges,0.1,255,cv2.THRESH_BINARY)
-        cv2.imwrite('edges_lines.jpg',edges)
-        # get contours
-        contours,hierarchy = cv2.findContours(edges, cv2.RETR_TREE,cv2.CHAIN_APPROX_SIMPLE)
-        area_contour=[]
-        for cnt in contours:
-            area_contour.append(cv2.contourArea(cnt)/float(x0*y0))
+    inty,intx = GetMouseCoords(img)
+    print(intx,inty)
+    
+    eligible_cnts=[]       
+    for e,cnt in enumerate(contours):
+        dist = cv2.pointPolygonTest(cnt,(inty,intx),True)
+        if dist>0:
+            eligible_cnts.append(e)
+    print(eligible_cnts)
+    
+    hull = cv2.convexHull(contours[eligible_cnts[0]]) 
+    fraction=0.1
+    while len(hull)!=4  and fraction<1:
+        hull = cv2.approxPolyDP(hull,fraction*cv2.arcLength(hull,True),True)
+        fraction+= 0.01
             
-        max_ind= area_contour.index(max(area_contour)) # get max area contour
-        cv2.drawContours(img,contours,max_ind,(0,255,0),2)  
-        print(contours[max_ind])
-        hull = contours[max_ind]
-        hull = cv2.convexHull(contours[max_ind])    # find the convex hull of         
-        cv2.drawContours(img,[hull],0,(0,0,255),2)          
-        if(area_contour[max_ind]<0.01):
-            print('Couldnt find area larger than 1%, trying with reduced edge threshold')
-            small_area=True
-            low_thr-=10
-            high_thr-=80
-            continue
-        else:
-            small_area=False
-
-        fraction=0
-        while len(hull)!=4  and fraction<1:
-            hull = cv2.approxPolyDP(hull,fraction*cv2.arcLength(hull,True),True)
-            fraction+= 0.01
-            
-        if len(hull)==4:
-            cv2.drawContours(img,[hull],0,(255,0,0),2)  
-            src = np.float32([hull[0],hull[1],hull[2],hull[3]])
-            dest = np.float32([[y0,0],[y0,x0],[0,x0],[0,0]])
-            warp_mat = cv2.getPerspectiveTransform(src,dest)
-            img_warped = cv2.warpPerspective(img,warp_mat,(y0,x0))
-            cv2.imwrite(outFile,img_warped) 
-            Success=1
-    cv2.imwrite(cntFile,img)
+    if len(hull)==4:
+        src = np.float32([hull[0],hull[1],hull[2],hull[3]])
+        dest = np.float32([[y0,0],[y0,x0],[0,x0],[0,0]])
+        warp_mat = cv2.getPerspectiveTransform(src,dest)
+        img_warped = cv2.warpPerspective(orig,warp_mat,(y0,x0))
+        cv2.imwrite(outFile,img_warped) 
+        Success=1
+      
     return Success
         
+if __name__ == '__main__': 
+    inFile,outFile,verbose=getArgs(sys.argv[1:])
+    retval=SnapSlide(inFile,outFile,verbose)
+    if retval==1:
+        print('Snapped slide!')
+    
+    
